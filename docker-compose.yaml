@@ -1,0 +1,52 @@
+services:
+  db:
+    image: postgres:13
+    container_name: lab10-postgres
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: temp
+      POSTGRES_PASSWORD: temp
+      POSTGRES_DB: database
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temp -d database"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  fastapi:
+    build: { context: ./fastapi }
+    container_name: lab10-fastapi
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg2://temp:temp@db:5432/database
+      CORS_ORIGINS: http://localhost:3000
+    volumes:
+      - ./fastapi:/src
+    working_dir: /src
+    command: uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      db:
+        condition: service_healthy
+
+  nextjs:
+    build: { context: ./nextjs }
+    container_name: lab10-nextjs
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    volumes:
+      - ./nextjs:/src
+      - /src/node_modules
+    working_dir: /src
+    command: npm run dev
+    depends_on:
+      - fastapi
+
+volumes:
+  postgres_data:
