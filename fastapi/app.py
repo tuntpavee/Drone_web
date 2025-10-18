@@ -1,17 +1,29 @@
 # app.py
 from fastapi import FastAPI, Depends, HTTPException, status, Body
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from pydantic import BaseModel, EmailStr, constr
 from passlib.context import CryptContext
 from typing import List, Optional, Dict, Any
-import os, json, math, time
+import os, json, math, time, asyncio
+
+# --- Google Identity (verify ID token) ---
+from google.oauth2 import id_token
+from google.auth.transport import requests as grequests
+
+# ------------------------------------------------------------------------------
+# ENV
+# ------------------------------------------------------------------------------
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://temp:temp@db:5432/database")
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
+POLL_SECONDS = float(os.getenv("STATS_POLL_SECONDS", "2"))
 
 # ------------------------------------------------------------------------------
 # DB
 # ------------------------------------------------------------------------------
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://temp:temp@db:5432/database")
 engine = create_engine(DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
@@ -27,10 +39,9 @@ def get_db():
 # ------------------------------------------------------------------------------
 app = FastAPI()
 
-allow_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allow_origins,
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -74,7 +85,7 @@ def health():
     return {"ok": True}
 
 # ------------------------------------------------------------------------------
-# Auth
+# Auth - email/password
 # ------------------------------------------------------------------------------
 @app.post("/auth/register", status_code=201)
 @app.post("/auth/register/", status_code=201)
@@ -82,7 +93,6 @@ def register(payload: RegisterIn, db=Depends(get_db)):
     email = payload.email.strip().lower()
     username = (payload.username or "").strip().lower() or None
 
-    # uniqueness checks
     if db.execute(text("SELECT 1 FROM users WHERE email=:e"), {"e": email}).first():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
     if username and db.execute(text("SELECT 1 FROM users WHERE username=:u"), {"u": username}).first():
@@ -97,7 +107,24 @@ def register(payload: RegisterIn, db=Depends(get_db)):
         {"f": payload.first_name, "l": payload.last_name, "u": username, "e": email, "p": pw_hash},
     )
     db.commit()
-    return {"ok": True}
+
+    row = db.execute(
+        text("""SELECT id, first_name, last_name, username, email
+                FROM users WHERE email=:e"""),
+        {"e": email},
+    ).mappings().first()
+
+    return {
+        "ok": True,
+        "is_new": True,  # <-- useful symmetry with Google route
+        "user": {
+            "id": row["id"],
+            "first_name": row["first_name"],
+            "last_name": row["last_name"],
+            "username": row["username"],
+            "email": row["email"],
+        }
+    }
 
 @app.post("/auth/login")
 @app.post("/auth/login/")
@@ -122,6 +149,84 @@ def login(payload: LoginIn, db=Depends(get_db)):
             "email": row["email"],
         }
     }
+
+# ------------------------------------------------------------------------------
+# Auth - Google Sign-In
+# ------------------------------------------------------------------------------
+@app.post("/auth/google")
+@app.post("/auth/google/")
+@app.post("/auth/google")
+@app.post("/auth/google/")
+def google_login(payload: dict = Body(...), db=Depends(get_db)):
+    credential = (payload or {}).get("credential")
+    if not credential:
+        raise HTTPException(status_code=400, detail="Missing credential")
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="GOOGLE_CLIENT_ID not configured")
+
+    try:
+        info = id_token.verify_oauth2_token(credential, grequests.Request(), GOOGLE_CLIENT_ID)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid Google token: {e}")
+
+    if not info.get("email") or not info.get("email_verified"):
+        raise HTTPException(status_code=400, detail="Email not verified by Google")
+
+    email = info["email"].strip().lower()
+    sub   = info.get("sub")
+    first = info.get("given_name") or None
+    last  = info.get("family_name") or None
+    pic   = info.get("picture") or None
+
+    existing = db.execute(
+        text("""SELECT id, first_name, last_name, username, email
+                FROM users WHERE email=:e"""),
+        {"e": email},
+    ).mappings().first()
+
+    is_new = False
+    if not existing:
+        is_new = True
+        db.execute(
+            text("""
+                INSERT INTO users (first_name, last_name, username, email, password_hash, google_sub, avatar_url)
+                VALUES (:f, :l, :u, :e, :p, :s, :pic)
+            """),
+            {"f": first, "l": last, "u": None, "e": email, "p": None, "s": sub, "pic": pic},
+        )
+        db.commit()
+    else:
+        db.execute(
+            text("""
+                UPDATE users
+                SET google_sub = COALESCE(google_sub, :s),
+                    first_name = COALESCE(first_name, :f),
+                    last_name  = COALESCE(last_name,  :l),
+                    avatar_url = COALESCE(:pic, avatar_url)
+                WHERE email = :e
+            """),
+            {"s": sub, "f": first, "l": last, "pic": pic, "e": email},
+        )
+        db.commit()
+
+    row = db.execute(
+        text("""SELECT id, first_name, last_name, username, email
+                FROM users WHERE email=:e"""),
+        {"e": email},
+    ).mappings().first()
+
+    return {
+        "ok": True,
+        "is_new": is_new,  # <-- tells frontend where to go
+        "user": {
+            "id": row["id"],
+            "first_name": row["first_name"],
+            "last_name": row["last_name"],
+            "username": row["username"],
+            "email": row["email"],
+        }
+    }
+
 
 # ------------------------------------------------------------------------------
 # Paths (tolerant save + JSON cast fix)
@@ -161,7 +266,6 @@ def save_path(payload: dict = Body(...), db=Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"invalid waypoint: {e}")
 
-    # Use CAST(:param AS JSONB) so bind params are always recognized
     db.execute(
         text("""
             INSERT INTO paths (user_email, name, params, waypoints)
@@ -206,11 +310,13 @@ def telemetry_latest():
     }
 
 # ------------------------------------------------------------------------------
-# Stats (DB dashboard)
+# Stats overview (Safari-safe dates)
 # ------------------------------------------------------------------------------
-@app.get("/stats/overview")
-@app.get("/stats/overview/")
-def stats_overview(db=Depends(get_db)) -> Dict[str, Any]:
+def _rows_to_dicts(rows):
+    # rows is a list of RowMapping
+    return [dict(r) for r in rows]
+
+def _stats_query(db) -> Dict[str, Any]:
     users_count = db.execute(text("SELECT COUNT(*) FROM users")).scalar_one()
     paths_count = db.execute(text("SELECT COUNT(*) FROM paths")).scalar_one()
 
@@ -218,30 +324,36 @@ def stats_overview(db=Depends(get_db)) -> Dict[str, Any]:
         WITH days AS (
           SELECT generate_series((CURRENT_DATE - INTERVAL '6 day')::date,
                                  CURRENT_DATE::date, '1 day') AS d)
-        SELECT d::date AS day, COALESCE(COUNT(u.*),0) AS cnt
+        SELECT to_char(d::date, 'YYYY-MM-DD') AS day, COALESCE(COUNT(u.*),0) AS cnt
         FROM days LEFT JOIN users u ON u.created_at::date = d::date
         GROUP BY day ORDER BY day;
     """)).mappings().all()
+    users_last7 = _rows_to_dicts(users_last7)
 
     paths_last7 = db.execute(text("""
         WITH days AS (
           SELECT generate_series((CURRENT_DATE - INTERVAL '6 day')::date,
                                  CURRENT_DATE::date, '1 day') AS d)
-        SELECT d::date AS day, COALESCE(COUNT(p.*),0) AS cnt
+        SELECT to_char(d::date, 'YYYY-MM-DD') AS day, COALESCE(COUNT(p.*),0) AS cnt
         FROM days LEFT JOIN paths p ON p.created_at::date = d::date
         GROUP BY day ORDER BY day;
     """)).mappings().all()
+    paths_last7 = _rows_to_dicts(paths_last7)
 
     recent_users = db.execute(text("""
-        SELECT id, first_name, last_name, username, email, created_at
+        SELECT id, first_name, last_name, username, email,
+               to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at
         FROM users ORDER BY created_at DESC NULLS LAST LIMIT 5;
     """)).mappings().all()
+    recent_users = _rows_to_dicts(recent_users)
 
     recent_paths = db.execute(text("""
-        SELECT id, name, created_at,
-               COALESCE(jsonb_array_length(waypoints), 0) AS points
+        SELECT id, name,
+               COALESCE(jsonb_array_length(waypoints), 0) AS points,
+               to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at
         FROM paths ORDER BY created_at DESC NULLS LAST LIMIT 5;
     """)).mappings().all()
+    recent_paths = _rows_to_dicts(recent_paths)
 
     return {
         "users_count": users_count,
@@ -251,3 +363,33 @@ def stats_overview(db=Depends(get_db)) -> Dict[str, Any]:
         "recent_users": recent_users,
         "recent_paths": recent_paths,
     }
+
+@app.get("/stats/overview")
+@app.get("/stats/overview/")
+def stats_overview(db=Depends(get_db)) -> Dict[str, Any]:
+    return _stats_query(db)
+
+# ------------------------------------------------------------------------------
+# SSE stream (DB poll -> push)
+@app.get("/stats/stream")
+async def stats_stream():
+    async def event_gen():
+        db = SessionLocal()
+        try:
+            while True:
+                payload = _stats_query(db)          # all dicts now
+                yield f"data: {json.dumps(payload)}\n\n".encode("utf-8")
+                await asyncio.sleep(POLL_SECONDS)
+        finally:
+            db.close()
+
+    return StreamingResponse(
+        event_gen(),
+        headers={
+            "Cache-Control": "no-cache",
+            "Content-Type": "text/event-stream",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",   # simplest for local dev
+        },
+    )
+

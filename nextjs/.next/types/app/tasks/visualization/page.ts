@@ -1,4 +1,4 @@
-// File: /src/app/tasks/visualization/page.jsx
+// File: /app/app/tasks/visualization/page.jsx
 import * as entry from '../../../../../app/tasks/visualization/page.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 

@@ -1,144 +1,223 @@
 "use client";
-import Image from "next/image";
-import Link from "next/link";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { GoogleLogin } from "@react-oauth/google";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export default function RegisterPage() {
-  const [first, setFirst] = useState("");
-  const [last, setLast] = useState("");
-  const [username, setUsername] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [msg, setMsg] = useState(null);
+  const router = useRouter();
+  const [form, setForm] = useState({
+    first_name: "",
+    last_name: "",
+    username: "",
+    email: "",
+    password: "",
+  });
   const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+
+  const setField = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   async function onSubmit(e) {
     e.preventDefault();
-    setMsg(null);
-
-    if (!email || !password) {
-      setMsg({ type: "error", text: "Email and password are required." });
-      return;
-    }
-    if (password.length < 8) {
-      setMsg({ type: "error", text: "Password must be at least 8 characters." });
-      return;
-    }
-
+    if (loading) return;
+    setErr("");
     setLoading(true);
     try {
       const res = await fetch(`${API}/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          first_name: first || null,
-          last_name: last || null,
-          username: (username || "").trim() || null,
-          email,
-          password,
-        }),
+        body: JSON.stringify(form),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Sign up failed");
-      setMsg({ type: "success", text: "Account created. You can sign in now." });
-      // OPTIONAL: redirect to login
-      // setTimeout(() => (window.location.href = "/login"), 800);
-    } catch (err) {
-      setMsg({ type: "error", text: err.message });
+      localStorage.setItem("yim_user", JSON.stringify(data.user || {}));
+      router.replace("/tasks");
+    } catch (e) {
+      setErr(e.message || "Sign up failed");
     } finally {
       setLoading(false);
     }
   }
 
-  return (
-    <main style={styles.wrap}>
-      <div style={styles.card}>
-        <div style={styles.brandRow}>
-          <Image src="/yim-logo.png" width={40} height={40} alt="YIM BOT" />
-          <h1 style={{ margin: 0, fontSize: 22 }}>YIM BOT</h1>
-        </div>
+  async function onGoogleCredential(credential) {
+    try {
+      const res = await fetch(`${API}/auth/google`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credential }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Google sign-up failed");
+      localStorage.setItem("yim_user", JSON.stringify(data.user || {}));
+      router.replace("/tasks");
+    } catch (e) {
+      setErr(e.message || "Google sign-up failed");
+    }
+  }
 
-        <form onSubmit={onSubmit} style={{ display: "grid", gap: 14 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+  return (
+    <main style={styles.page}>
+      <div style={styles.bg} aria-hidden />
+      <form onSubmit={onSubmit} style={styles.card}>
+        <div style={styles.title}>Create your account</div>
+
+        <div style={styles.row2}>
+          <div style={styles.field}>
             <input
+              type="text"
+              placeholder="First name"
+              value={form.first_name}
+              onChange={(e) => setField("first_name", e.target.value)}
               style={styles.input}
-              placeholder="First Name (optional)"
-              value={first}
-              onChange={(e) => setFirst(e.target.value)}
-            />
-            <input
-              style={styles.input}
-              placeholder="Last Name (optional)"
-              value={last}
-              onChange={(e) => setLast(e.target.value)}
             />
           </div>
-
-          <input
-            style={styles.input}
-            placeholder="Username (optional)"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-          />
-
-          <input
-            style={styles.input}
-            type="email"
-            placeholder="Email *"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-
-          <input
-            style={styles.input}
-            type="password"
-            placeholder="Password (min 8 chars) *"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-
-          <button style={styles.btn} disabled={loading}>
-            {loading ? "Signing up..." : "Sign up"}
-          </button>
-        </form>
-
-        <div style={{ textAlign: "center", marginTop: 10 }}>
-          <Link href="/login" style={styles.link}>Back to Sign in</Link>
+          <div style={styles.field}>
+            <input
+              type="text"
+              placeholder="Last name"
+              value={form.last_name}
+              onChange={(e) => setField("last_name", e.target.value)}
+              style={styles.input}
+            />
+          </div>
         </div>
 
-        {msg && (
-          <p style={{ ...styles.msg, color: msg.type === "error" ? "#b91c1c" : "#166534" }}>
-            {msg.text}
-          </p>
-        )}
-      </div>
+        <div style={styles.field}>
+          <input
+            type="text"
+            placeholder="Username (optional)"
+            value={form.username}
+            onChange={(e) => setField("username", e.target.value)}
+            style={styles.input}
+          />
+        </div>
+
+        <div style={styles.field}>
+          <input
+            type="email"
+            placeholder="email@example.com"
+            value={form.email}
+            onChange={(e) => setField("email", e.target.value)}
+            required
+            style={styles.input}
+          />
+        </div>
+
+        <div style={{ ...styles.field, position: "relative" }}>
+          <input
+            type="password"
+            placeholder="Create a password (min 8 chars)"
+            value={form.password}
+            onChange={(e) => setField("password", e.target.value)}
+            required
+            minLength={8}
+            autoComplete="new-password"
+            style={{ ...styles.input, paddingRight: 64 }}
+          />
+          <span style={styles.key} aria-hidden>🔑</span>
+        </div>
+
+        <button disabled={loading} type="submit" style={styles.button}>
+          {loading ? "Creating…" : "Create Account"}
+        </button>
+
+        <div style={styles.divider}>or</div>
+
+        <div style={{ display: "flex", justifyContent: "center" }}>
+          <GoogleLogin
+            onSuccess={(r) => onGoogleCredential(r.credential)}
+            onError={() => setErr("Google sign-up failed")}
+            useOneTap={false}
+          />
+        </div>
+
+        <div style={styles.subtle}>
+          Already have an account?{" "}
+          <a href="/login" style={styles.link}>Sign in</a>
+        </div>
+
+        {err && <div style={styles.error}>{err}</div>}
+      </form>
     </main>
   );
 }
 
 const styles = {
-  wrap: {
-    minHeight: "100vh",
-    display: "grid",
-    placeItems: "center",
-    background: "linear-gradient(180deg,#f59e0b 0%,#ec4899 40%,#3b82f6 100%)",
-    padding: 16,
+  page: {
+    position: "relative",
+    minHeight: "100dvh",
+    fontFamily: "system-ui,-apple-system,Segoe UI,Roboto,sans-serif",
+    color: "#0f172a",
   },
+  bg: {
+    position: "fixed",
+    inset: 0,
+    zIndex: -1,
+    background: "linear-gradient(180deg,#f59e0b 0%,#ec4899 40%,#3b82f6 100%)",
+  },
+  // Wider card + bigger side padding so Safari's password pill stays inside
   card: {
     width: 720,
-    maxWidth: "100%",
+    maxWidth: "95vw",
+    margin: "10vh auto 0",
     background: "#fff",
-    borderRadius: 16,
-    padding: 24,
-    boxShadow: "0 10px 30px rgba(0,0,0,.08)",
+    borderRadius: 18,
+    boxShadow: "0 30px 90px rgba(15,23,42,.22)",
+    padding: "32px 44px 28px",     // generous side padding
   },
-  brandRow: { display: "flex", alignItems: "center", gap: 10, marginBottom: 8 },
-  input: { padding: "12px 14px", borderRadius: 8, border: "1px solid #cbd5e1", outline: "none" },
-  btn: { padding: "12px 16px", borderRadius: 10, background: "#93c5fd", border: 0, fontWeight: 700, cursor: "pointer" },
-  link: { fontWeight: 700, color: "#2563eb", textDecoration: "none" },
-  msg: { marginTop: 10, textAlign: "center", fontWeight: 600 },
+  title: { fontWeight: 900, fontSize: 24, marginBottom: 14 },
+  // Keep all fields centered with a unified wrapper to avoid overflow
+  field: {
+    width: "100%",
+    boxSizing: "border-box",
+    marginBottom: 12,
+  },
+  row2: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 12,
+    marginBottom: 0,
+  },
+  input: {
+    width: "100%",
+    height: 46,
+    borderRadius: 12,
+    border: "1px solid #d1d5db",
+    padding: "0 14px",
+    fontSize: 14,
+    outline: "none",
+    background: "#fff",
+    boxSizing: "border-box",
+  },
+  key: {
+    position: "absolute",
+    right: 18,
+    top: "50%",
+    transform: "translateY(-50%)",
+    opacity: 0.6,
+    fontSize: 18,
+    pointerEvents: "none",
+  },
+  button: {
+    width: "100%",
+    height: 46,
+    border: 0,
+    borderRadius: 12,
+    background: "#93c5fd",
+    color: "#0f172a",
+    fontWeight: 800,
+    cursor: "pointer",
+    marginTop: 4,
+  },
+  divider: {
+    textAlign: "center",
+    fontSize: 13,
+    color: "#6b7280",
+    margin: "12px 0",
+  },
+  subtle: { textAlign: "center", fontSize: 13, color: "#6b7280", marginTop: 6 },
+  link: { textDecoration: "none", color: "#2563eb", fontWeight: 700 },
+  error: { textAlign: "center", color: "#b91c1c", fontWeight: 700, marginTop: 10 },
 };

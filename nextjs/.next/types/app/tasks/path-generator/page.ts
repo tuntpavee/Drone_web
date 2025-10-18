@@ -1,4 +1,4 @@
-// File: /src/app/tasks/path-generator/page.jsx
+// File: /app/app/tasks/path-generator/page.jsx
 import * as entry from '../../../../../app/tasks/path-generator/page.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -21,20 +21,27 @@ export default function DbDashboard() {
     }
   }, [router]);
 
-  async function load() {
-    setLoading(true);
-    try {
-      const res = await fetch(`${API}/stats/overview`);
-      const data = await res.json();
-      setStats(data);
-    } catch (e) {
-      console.error(e);
-      setStats(null);
-    } finally {
-      setLoading(false);
-    }
-  }
-  useEffect(() => { load(); }, []);
+  // Live updates via SSE
+  useEffect(() => {
+    let cancelled = false;
+    const es = new EventSource(`${API}/stats/stream`);
+    es.onmessage = (evt) => {
+      try {
+        const data = JSON.parse(evt.data);
+        if (!cancelled) {
+          setStats(data);
+          setLoading(false);
+        }
+      } catch {}
+    };
+    es.onerror = () => {
+      // stream drops -> browser retries automatically due to "retry" hint
+    };
+    return () => {
+      cancelled = true;
+      es.close();
+    };
+  }, []);
 
   const usersSeries = stats?.users_last7_by_day ?? [];
   const pathsSeries = stats?.paths_last7_by_day ?? [];
@@ -133,7 +140,6 @@ function Card({ title, children }) {
 }
 
 function Bars({ series, max, color }) {
-  // series: [{day: '2025-09-27', cnt: 3}, ...]
   return (
     <div style={styles.canvasCard}>
       <div style={styles.barRow}>

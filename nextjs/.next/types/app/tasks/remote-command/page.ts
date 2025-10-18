@@ -1,4 +1,4 @@
-// File: /src/app/tasks/remote-command/page.jsx
+// File: /app/app/tasks/remote-command/page.jsx
 import * as entry from '../../../../../app/tasks/remote-command/page.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 

@@ -22,9 +22,8 @@ services:
     container_name: lab10-fastapi
     ports:
       - "8000:8000"
-    environment:
-      DATABASE_URL: postgresql+psycopg2://temp:temp@db:5432/database
-      CORS_ORIGINS: http://localhost:3000
+    env_file:
+      - ./fastapi/.env
     volumes:
       - ./fastapi:/src
     working_dir: /src
@@ -38,12 +37,15 @@ services:
     container_name: lab10-nextjs
     ports:
       - "3000:3000"
-    environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+    env_file:
+      - ./nextjs/.env.local
     volumes:
-      - ./nextjs:/src
-      - /src/node_modules
-    working_dir: /src
+      # This line syncs your local code into the container for live updates.
+      - ./nextjs:/app
+      # This "anonymous volume" tells Docker to use the node_modules
+      # from INSIDE the image, which solves the CSS error.
+      - /app/node_modules
+    working_dir: /app
     command: npm run dev
     depends_on:
       - fastapi
